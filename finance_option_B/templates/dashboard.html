@@ -1,0 +1,151 @@
+@app.route("/dashboard")
+def dashboard():
+
+    # =============================
+    # CHECK LOGIN
+    # =============================
+    if "user_id" not in session:
+        return redirect("/login")
+
+    # =============================
+    # FETCH DATA FROM DATABASE
+    # =============================
+    conn = sqlite3.connect("database.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT id, type, code, buy_price, qty 
+    FROM portfolio 
+    WHERE user_id=?
+    """, (session["user_id"],))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    # =============================
+    # VARIABLES
+    # =============================
+    portfolio = []
+    total_invested = 0
+    total_current = 0
+
+    stock_value = 0
+    mf_value = 0
+
+    # =============================
+    # PROCESS EACH ENTRY
+    # =============================
+    for row in rows:
+
+        stock_id, type_, code, buy, qty = row
+        live_price = 0
+
+        # =============================
+        # STOCK LOGIC
+        # =============================
+        if type_ == "Stock":
+            try:
+                stock = yf.Ticker(code)
+                data = stock.history(period="1d")
+
+                if not data.empty:
+                    live_price = data["Close"].iloc[-1]
+                else:
+                    live_price = 0
+            except:
+                live_price = 0
+
+            invested = buy * qty
+            current = live_price * qty
+            stock_value += current
+
+        # =============================
+        # MUTUAL FUND LOGIC
+        # =============================
+        else:
+            try:
+                url = f"https://api.mfapi.in/mf/{code}"
+                mf_data = requests.get(url).json()
+
+                nav = float(mf_data["data"][0]["nav"])
+                live_price = nav
+            except:
+                live_price = 0
+
+            invested = buy
+            current = live_price * qty
+            mf_value += current
+
+        # =============================
+        # PROFIT CALCULATION
+        # =============================
+        profit = current - invested
+
+        total_invested += invested
+        total_current += current
+
+        # =============================
+        # AI SUGGESTION
+        # =============================
+        if profit > 0:
+            suggestion = "HOLD 📈"
+        elif profit < 0:
+            suggestion = "BUY MORE 🔻"
+        else:
+            suggestion = "WAIT ⏳"
+
+        # =============================
+        # STORE DATA
+        # =============================
+        portfolio.append({
+            "id": stock_id,
+            "type": type_,
+            "code": code,
+            "buy": buy,
+            "qty": qty,
+            "live": round(live_price, 2),
+            "profit": round(profit, 2),
+            "suggestion": suggestion
+        })
+
+    # =============================
+    # TOTAL PROFIT
+    # =============================
+    total_profit = total_current - total_invested
+
+    # =============================
+    # RISK ANALYSIS
+    # =============================
+    total_assets = stock_value + mf_value
+
+    if total_assets == 0:
+        risk = "LOW"
+    else:
+        stock_ratio = stock_value / total_assets
+
+        if stock_ratio > 0.7:
+            risk = "HIGH 🔴"
+        elif stock_ratio > 0.4:
+            risk = "MEDIUM 🟡"
+        else:
+            risk = "LOW 🟢"
+
+    # =============================
+    # GRAPH DATA
+    # =============================
+    chart_labels = ["Stocks", "Mutual Funds"]
+    chart_values = [round(stock_value, 2), round(mf_value, 2)]
+
+    # =============================
+    # FINAL RETURN (FIXED PART)
+    # =============================
+    return render_template(
+        "dashboard.html",
+        portfolio=portfolio,
+        total_invested=round(total_invested, 2),
+        total_current=round(total_current, 2),
+        total_profit=round(total_profit, 2),
+        risk=risk,
+        chart_labels=chart_labels,
+        chart_values=chart_values
+    )
